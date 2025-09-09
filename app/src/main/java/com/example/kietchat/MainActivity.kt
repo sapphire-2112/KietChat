@@ -2,7 +2,10 @@ package com.example.kietchat.ui.theme
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -19,21 +22,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.kietchat.ble.BleManager
 
 class MainActivity : ComponentActivity() {
+
     private lateinit var bleManager: BleManager
+    private var chatMessages by mutableStateOf<List<String>>(emptyList())
+
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+            if (perms.values.all { it }) enableBluetoothAndInit()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestBlePermissions()
+    }
 
-        val requestPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-                val allGranted = perms.values.all { it }
-                if (allGranted) initBle()
-            }
-
+    private fun requestBlePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requestPermissionLauncher.launch(
                 arrayOf(
@@ -52,96 +61,89 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun enableBluetoothAndInit() {
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
+        if (!adapter.isEnabled) {
+            startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), 1)
+        } else initBle()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 1 && resultCode == Activity.RESULT_OK) initBle()
+    }
+
     private fun initBle() {
         bleManager = BleManager(this)
-        bleManager.startGattServer()
-        bleManager.startAdvertising()
-        bleManager.startScanning {}
+        bleManager.start()
+        bleManager.observeMessages { msg -> chatMessages = chatMessages + msg }
 
         setContent {
-            MaterialTheme { ChatScreen(bleManager) }
+            MaterialTheme {
+                ChatUIWithDevices(bleManager, chatMessages)
+            }
         }
     }
 }
 
-@SuppressLint("MissingPermission")
 @Composable
-fun ChatScreen(bleManager: BleManager) {
-    var devices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
-    var connectedDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
-    var chatMessages by remember { mutableStateOf<List<String>>(emptyList()) }
+fun ChatUIWithDevices(bleManager: BleManager, chatMessages: List<String>) {
     var input by remember { mutableStateOf("") }
+    var availableDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
 
+    // Update devices every second
     LaunchedEffect(Unit) {
-        bleManager.startScanning { device ->
-            if (devices.none { it.address == device.address }) devices = devices + device
+        while (true) {
+            availableDevices = bleManager.getConnectedDevices()
+            kotlinx.coroutines.delay(1000)
         }
-        bleManager.observeMessages { msg -> chatMessages = chatMessages + msg }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Color(0xFF1976D2), Color(0xFF2196F3), Color(0xFF64B5F6))
-                )
-            )
-            .padding(16.dp),
+            .background(Brush.verticalGradient(listOf(Color(0xFF1976D2), Color(0xFF2196F3), Color(0xFF64B5F6))))
+            .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
-            text = "KIET Chat",
-            style = MaterialTheme.typography.headlineMedium,
+            text = "KIETChat",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
             color = Color.White,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Devices List
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        // Available Devices
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp)) {
-                Text("Available Devices", color = Color.White)
+                Text("Available Devices", color = Color.White, fontWeight = FontWeight.SemiBold)
                 LazyColumn {
-                    items(devices) { device ->
+                    items(availableDevices) { device ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    bleManager.connect(device)
-                                    connectedDevice = device
-                                }
+                                .clickable {  }
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = bleManager.getPeerName(device),
-                                color = Color.White,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (connectedDevice == device) {
-                                Text("Connected", color = Color.Green)
-                            }
+                            Text(bleManager.getPeerName(device), color = Color.White, modifier = Modifier.weight(1f))
+                            Text("Connected", color = Color.Green)
                         }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Chat Window
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)),
-            modifier = Modifier.weight(1f)
-        ) {
+        // Chat messages
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)), modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(modifier = Modifier.padding(12.dp)) {
                 items(chatMessages) { msg ->
-                    Text(text = msg, color = Color.White)
+                    Text(msg, color = Color.White)
                     Spacer(modifier = Modifier.height(4.dp))
                 }
             }
@@ -149,7 +151,7 @@ fun ChatScreen(bleManager: BleManager) {
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Input Row
+        // Input + Send
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextField(
                 value = input,
@@ -164,13 +166,9 @@ fun ChatScreen(bleManager: BleManager) {
                 )
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = {
-                if (input.isNotBlank()) {
-                    bleManager.sendMessage(input)
-                    chatMessages = chatMessages + "Me: $input"
-                    input = ""
-                }
-            }) { Text("Send") }
+            Button(onClick = { if (input.isNotBlank()) { bleManager.sendMessage(input); input = "" } }) {
+                Text("Send")
+            }
         }
     }
 }
