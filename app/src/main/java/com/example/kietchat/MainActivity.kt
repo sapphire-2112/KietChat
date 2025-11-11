@@ -5,6 +5,8 @@ import android.bluetooth.*
 import android.content.*
 import android.content.pm.PackageManager
 import android.os.*
+import android.view.Gravity
+import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -17,7 +19,7 @@ class MainActivity : AppCompatActivity() {
 
     private val REQUEST_PERMS = 100
     private val uuid: UUID =
-        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // Classic SPP
+        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // Classic SPP UUID
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var socket: BluetoothSocket? = null
@@ -26,18 +28,20 @@ class MainActivity : AppCompatActivity() {
     private var output: java.io.OutputStream? = null
 
     private lateinit var statusView: TextView
-    private lateinit var chatView: TextView
     private lateinit var messageInput: EditText
     private lateinit var sendBtn: Button
+    private lateinit var chatContainer: LinearLayout
+    private lateinit var chatScroll: ScrollView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         statusView = findViewById(R.id.status)
-        chatView = findViewById(R.id.chatView)
         messageInput = findViewById(R.id.messageInput)
         sendBtn = findViewById(R.id.sendBtn)
+        chatContainer = findViewById(R.id.chatContainer)
+        chatScroll = findViewById(R.id.chatScroll)
 
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
 
@@ -67,10 +71,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         }
 
-        // start accepting connections (server)
+        // Start accepting connections (server)
         startServer()
 
-        // find bonded phones only
+        // Find bonded phones only
         val pairedPhones = bluetoothAdapter!!.bondedDevices.filter {
             it.bluetoothClass.deviceClass in listOf(
                 BluetoothClass.Device.PHONE_SMART,
@@ -79,7 +83,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (pairedPhones.isNotEmpty()) {
-            // try connect to first bonded phone
+            // Try connect to first bonded phone
             connectToDevice(pairedPhones.first())
         } else {
             statusView.text = "No paired phones found"
@@ -89,7 +93,7 @@ class MainActivity : AppCompatActivity() {
             val msg = messageInput.text.toString()
             if (msg.isNotEmpty()) {
                 sendMessage(msg)
-                chatView.append("\nYou: $msg")
+                addMessage("You: $msg", true)
                 messageInput.text.clear()
             }
         }
@@ -149,7 +153,7 @@ class MainActivity : AppCompatActivity() {
                     val bytes = input?.read(buffer) ?: break
                     val msg = String(buffer, 0, bytes)
                     runOnUiThread {
-                        chatView.append("\nPeer: $msg")
+                        addMessage("Peer: $msg", false)
                     }
                 } catch (e: Exception) {
                     runOnUiThread { statusView.text = "Disconnected" }
@@ -166,6 +170,34 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 statusView.text = "Send failed: ${e.message}"
             }
+        }
+    }
+
+    // Chat bubble UI helper
+    private fun addMessage(text: String, isSent: Boolean) {
+        val messageView = TextView(this)
+        messageView.text = text
+        messageView.textSize = 15f
+        messageView.setPadding(20, 12, 20, 12)
+        messageView.maxWidth = 800
+        messageView.background = ContextCompat.getDrawable(
+            this,
+            if (isSent) R.drawable.bubble_sent else R.drawable.bubble_received
+        )
+        messageView.setTextColor(ContextCompat.getColor(this, android.R.color.black))
+
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        params.setMargins(12, 8, 12, 8)
+        params.gravity = if (isSent) Gravity.END else Gravity.START
+        messageView.layoutParams = params
+
+        chatContainer.addView(messageView)
+
+        chatScroll.post {
+            chatScroll.fullScroll(View.FOCUS_DOWN)
         }
     }
 

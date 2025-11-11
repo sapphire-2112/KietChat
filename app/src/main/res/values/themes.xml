@@ -1,5 +1,11 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-
-    <style name="Theme.KietChat" parent="android:Theme.Material.Light.NoActionBar" />
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.KietChat" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Primary Blue Theme -->
+        <item name="colorPrimary">#1976D2</item> <!-- Deep Blue -->
+        <item name="colorPrimaryVariant">#1565C0</item>
+        <item name="colorSecondary">#03A9F4</item> <!-- Light Blue -->
+        <item name="android:statusBarColor">#1565C0</item>
+        <item name="android:navigationBarColor">#1976D2</item>
+        <item name="android:windowBackground">#E3F2FD</item>
+    </style>
 </resources>

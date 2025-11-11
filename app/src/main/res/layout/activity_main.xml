@@ -3,48 +3,72 @@
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp">
+    android:background="#E3F2FD"
+    android:padding="12dp">
 
     <TextView
         android:id="@+id/status"
-        android:text="Disconnected"
+        android:text="🔵 Disconnected"
+        android:textStyle="bold"
+        android:textColor="#0D47A1"
         android:textSize="16sp"
+        android:padding="8dp"
+        android:background="#BBDEFB"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:elevation="2dp"
+        android:layout_marginBottom="8dp"
+        android:backgroundTint="#90CAF9" />
 
     <ScrollView
+        android:id="@+id/chatScroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#EEEEEE">
+        android:background="@drawable/chat_background"
+        android:padding="8dp">
 
-        <TextView
-            android:id="@+id/chatView"
+        <LinearLayout
+            android:id="@+id/chatContainer"
+            android:orientation="vertical"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="15sp"
-            android:padding="8dp" />
+            android:layout_height="wrap_content" />
     </ScrollView>
 
     <LinearLayout
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingTop="8dp">
+        android:paddingTop="8dp"
+        android:background="#BBDEFB"
+        android:padding="8dp"
+        android:layout_marginTop="4dp"
+        android:gravity="center_vertical"
+        android:elevation="2dp"
+        android:layout_marginBottom="6dp"
+        android:clipToOutline="true">
 
         <EditText
             android:id="@+id/messageInput"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
-            android:hint="Type message"
-            android:inputType="text" />
+            android:hint="Type a message..."
+            android:background="@drawable/message_input_bg"
+            android:padding="10dp"
+            android:textColor="#0D47A1"
+            android:textSize="15sp" />
 
         <Button
             android:id="@+id/sendBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Send" />
+            android:text="Send"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#1976D2"
+            android:layout_marginLeft="8dp"
+            android:padding="10dp" />
     </LinearLayout>
 
 </LinearLayout>
