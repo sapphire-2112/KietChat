@@ -1,10 +1,13 @@
-package com.example.kietchat.ble
+package com.example.kietchat
 
-import java.util.*
+import android.util.Log
 
-object BleService {
-    val CHAT_SERVICE_UUID: UUID = UUID.fromString("0000abcd-0000-1000-8000-00805f9b34fb")
-    val MESSAGE_CHAR_UUID: UUID = UUID.fromString("0000dcba-0000-1000-8000-00805f9b34fb")
-    // Standard Client Characteristic Configuration Descriptor UUID (for notifications)
-    val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+class BleService {
+    fun sendData(data: String) {
+        Log.d("BleService", "Sending data: $data")
+    }
+
+    fun receiveData(data: String) {
+        Log.d("BleService", "Received: $data")
+    }
 }

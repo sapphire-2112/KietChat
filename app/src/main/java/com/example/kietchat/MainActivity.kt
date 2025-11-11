@@ -1,174 +1,180 @@
-package com.example.kietchat.ui.theme
+package com.example.kietchat
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.app.Activity
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.content.Intent
-import android.os.Build
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.kietchat.ble.BleManager
+import android.bluetooth.*
+import android.content.*
+import android.content.pm.PackageManager
+import android.os.*
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import java.io.IOException
+import java.util.*
+import kotlin.concurrent.thread
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
-    private lateinit var bleManager: BleManager
-    private var chatMessages by mutableStateOf<List<String>>(emptyList())
+    private val REQUEST_PERMS = 100
+    private val uuid: UUID =
+        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // Classic SPP
 
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-            if (perms.values.all { it }) enableBluetoothAndInit()
-        }
+    private var bluetoothAdapter: BluetoothAdapter? = null
+    private var socket: BluetoothSocket? = null
+    private var serverSocket: BluetoothServerSocket? = null
+    private var input: java.io.InputStream? = null
+    private var output: java.io.OutputStream? = null
+
+    private lateinit var statusView: TextView
+    private lateinit var chatView: TextView
+    private lateinit var messageInput: EditText
+    private lateinit var sendBtn: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestBlePermissions()
-    }
+        setContentView(R.layout.activity_main)
 
-    private fun requestBlePermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requestPermissionLauncher.launch(
+        statusView = findViewById(R.id.status)
+        chatView = findViewById(R.id.chatView)
+        messageInput = findViewById(R.id.messageInput)
+        sendBtn = findViewById(R.id.sendBtn)
+
+        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+
+        // Ask permissions
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
                 arrayOf(
                     Manifest.permission.BLUETOOTH_CONNECT,
                     Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_ADVERTISE
-                )
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ),
+                REQUEST_PERMS
             )
+        }
+
+        if (bluetoothAdapter == null) {
+            statusView.text = "Bluetooth not supported"
+            return
+        }
+
+        if (!bluetoothAdapter!!.isEnabled) {
+            startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+        }
+
+        // start accepting connections (server)
+        startServer()
+
+        // find bonded phones only
+        val pairedPhones = bluetoothAdapter!!.bondedDevices.filter {
+            it.bluetoothClass.deviceClass in listOf(
+                BluetoothClass.Device.PHONE_SMART,
+                BluetoothClass.Device.PHONE_CELLULAR
+            )
+        }
+
+        if (pairedPhones.isNotEmpty()) {
+            // try connect to first bonded phone
+            connectToDevice(pairedPhones.first())
         } else {
-            requestPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
+            statusView.text = "No paired phones found"
         }
-    }
 
-    @SuppressLint("MissingPermission")
-    private fun enableBluetoothAndInit() {
-        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
-        if (!adapter.isEnabled) {
-            startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), 1)
-        } else initBle()
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 1 && resultCode == Activity.RESULT_OK) initBle()
-    }
-
-    private fun initBle() {
-        bleManager = BleManager(this)
-        bleManager.start()
-        bleManager.observeMessages { msg -> chatMessages = chatMessages + msg }
-
-        setContent {
-            MaterialTheme {
-                ChatUIWithDevices(bleManager, chatMessages)
+        sendBtn.setOnClickListener {
+            val msg = messageInput.text.toString()
+            if (msg.isNotEmpty()) {
+                sendMessage(msg)
+                chatView.append("\nYou: $msg")
+                messageInput.text.clear()
             }
         }
     }
-}
 
-@Composable
-fun ChatUIWithDevices(bleManager: BleManager, chatMessages: List<String>) {
-    var input by remember { mutableStateOf("") }
-    var availableDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
-
-    // Update devices every second
-    LaunchedEffect(Unit) {
-        while (true) {
-            availableDevices = bleManager.getConnectedDevices()
-            kotlinx.coroutines.delay(1000)
+    private fun startServer() {
+        thread {
+            try {
+                serverSocket =
+                    bluetoothAdapter?.listenUsingRfcommWithServiceRecord("KIETChat", uuid)
+                val socketTemp = serverSocket?.accept() // blocking
+                socket = socketTemp
+                runOnUiThread {
+                    statusView.text = "Connected (server)"
+                }
+                input = socket?.inputStream
+                output = socket?.outputStream
+                listenForMessages()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    statusView.text = "Server failed: ${e.message}"
+                }
+            }
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF1976D2), Color(0xFF2196F3), Color(0xFF64B5F6))))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = "KIETChat",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-        Spacer(modifier = Modifier.height(10.dp))
+    private fun connectToDevice(device: BluetoothDevice) {
+        thread {
+            try {
+                bluetoothAdapter?.cancelDiscovery()
+                val sock = device.createRfcommSocketToServiceRecord(uuid)
+                sock.connect()
+                socket = sock
+                runOnUiThread { statusView.text = "Connected to ${device.name}" }
+                input = socket?.inputStream
+                output = socket?.outputStream
+                listenForMessages()
+            } catch (e: IOException) {
+                e.printStackTrace()
+                runOnUiThread {
+                    statusView.text = "Connection failed: ${e.message}"
+                }
+                try {
+                    socket?.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
 
-        // Available Devices
-        Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp)) {
-                Text("Available Devices", color = Color.White, fontWeight = FontWeight.SemiBold)
-                LazyColumn {
-                    items(availableDevices) { device ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {  }
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(bleManager.getPeerName(device), color = Color.White, modifier = Modifier.weight(1f))
-                            Text("Connected", color = Color.Green)
-                        }
+    private fun listenForMessages() {
+        thread {
+            val buffer = ByteArray(1024)
+            while (true) {
+                try {
+                    val bytes = input?.read(buffer) ?: break
+                    val msg = String(buffer, 0, bytes)
+                    runOnUiThread {
+                        chatView.append("\nPeer: $msg")
                     }
+                } catch (e: Exception) {
+                    runOnUiThread { statusView.text = "Disconnected" }
+                    break
                 }
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Chat messages
-        Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)), modifier = Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(modifier = Modifier.padding(12.dp)) {
-                items(chatMessages) { msg ->
-                    Text(msg, color = Color.White)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
+    private fun sendMessage(msg: String) {
+        try {
+            output?.write(msg.toByteArray())
+        } catch (e: IOException) {
+            runOnUiThread {
+                statusView.text = "Send failed: ${e.message}"
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Input + Send
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Type a message...") },
-                colors = TextFieldDefaults.colors(
-                    unfocusedContainerColor = Color.White,
-                    focusedContainerColor = Color.White,
-                    focusedTextColor = Color.Black,
-                    unfocusedTextColor = Color.Black
-                )
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = { if (input.isNotBlank()) { bleManager.sendMessage(input); input = "" } }) {
-                Text("Send")
-            }
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            socket?.close()
+            serverSocket?.close()
+        } catch (_: Exception) {
         }
     }
 }
