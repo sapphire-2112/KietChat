@@ -5,9 +5,8 @@ import android.bluetooth.*
 import android.content.*
 import android.content.pm.PackageManager
 import android.os.*
-import android.view.Gravity
-import android.view.View
 import android.widget.*
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -19,7 +18,7 @@ class MainActivity : AppCompatActivity() {
 
     private val REQUEST_PERMS = 100
     private val uuid: UUID =
-        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // Classic SPP UUID
+        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") // SPP UUID
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var socket: BluetoothSocket? = null
@@ -27,25 +26,32 @@ class MainActivity : AppCompatActivity() {
     private var input: java.io.InputStream? = null
     private var output: java.io.OutputStream? = null
 
-    private lateinit var statusView: TextView
+    private lateinit var status: TextView
+    private lateinit var chatContainer: LinearLayout
     private lateinit var messageInput: EditText
     private lateinit var sendBtn: Button
-    private lateinit var chatContainer: LinearLayout
-    private lateinit var chatScroll: ScrollView
+
+    private lateinit var deviceListDialog: AlertDialog
+    private val foundDevices = mutableListOf<BluetoothDevice>()
+    private lateinit var receiver: BroadcastReceiver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        statusView = findViewById(R.id.status)
+        status = findViewById(R.id.status)
+        chatContainer = findViewById(R.id.chatContainer)
         messageInput = findViewById(R.id.messageInput)
         sendBtn = findViewById(R.id.sendBtn)
-        chatContainer = findViewById(R.id.chatContainer)
-        chatScroll = findViewById(R.id.chatScroll)
 
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
 
-        // Ask permissions
+        if (bluetoothAdapter == null) {
+            status.text = "❌ Bluetooth not supported"
+            return
+        }
+
+        // Request Bluetooth permissions
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -62,61 +68,102 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        if (bluetoothAdapter == null) {
-            statusView.text = "Bluetooth not supported"
-            return
-        }
-
+        // Enable Bluetooth if off
         if (!bluetoothAdapter!!.isEnabled) {
             startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         }
 
-        // Start accepting connections (server)
+        // Make this device discoverable
+        val discoverIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+        discoverIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+        startActivity(discoverIntent)
+        status.text = "📡 Discoverable for 5 mins"
+
+        // Start server to accept connections
         startServer()
 
-        // Find bonded phones only
-        val pairedPhones = bluetoothAdapter!!.bondedDevices.filter {
-            it.bluetoothClass.deviceClass in listOf(
-                BluetoothClass.Device.PHONE_SMART,
-                BluetoothClass.Device.PHONE_CELLULAR
-            )
-        }
-
-        if (pairedPhones.isNotEmpty()) {
-            // Try connect to first bonded phone
-            connectToDevice(pairedPhones.first())
-        } else {
-            statusView.text = "No paired phones found"
-        }
+        // Start discovering other devices
+        startDiscovery()
 
         sendBtn.setOnClickListener {
-            val msg = messageInput.text.toString()
+            val msg = messageInput.text.toString().trim()
             if (msg.isNotEmpty()) {
                 sendMessage(msg)
-                addMessage("You: $msg", true)
+                addMessage("You", msg)
                 messageInput.text.clear()
             }
         }
+    }
+
+    private fun startDiscovery() {
+        foundDevices.clear()
+
+        receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val action = intent?.action
+                if (BluetoothDevice.ACTION_FOUND == action) {
+                    val device: BluetoothDevice? =
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    if (device != null && device.bluetoothClass.deviceClass in listOf(
+                            BluetoothClass.Device.PHONE_SMART,
+                            BluetoothClass.Device.PHONE_CELLULAR
+                        )
+                    ) {
+                        if (!foundDevices.any { it.address == device.address }) {
+                            foundDevices.add(device)
+                        }
+                    }
+                } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED == action) {
+                    showDeviceList()
+                }
+            }
+        }
+
+        val filter = IntentFilter()
+        filter.addAction(BluetoothDevice.ACTION_FOUND)
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        registerReceiver(receiver, filter)
+
+        bluetoothAdapter?.startDiscovery()
+        status.text = "🔍 Scanning for nearby phones..."
+    }
+
+    private fun showDeviceList() {
+        if (foundDevices.isEmpty()) {
+            status.text = "❌ No nearby phones found"
+            return
+        }
+
+        val deviceNames = foundDevices.map { it.name ?: it.address }.toTypedArray()
+
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Select a device to connect")
+        builder.setItems(deviceNames) { _, which ->
+            val device = foundDevices[which]
+            status.text = "🔗 Connecting to ${device.name}"
+            connectToDevice(device)
+        }
+        builder.setCancelable(false)
+
+        deviceListDialog = builder.create()
+        deviceListDialog.show()
     }
 
     private fun startServer() {
         thread {
             try {
                 serverSocket =
-                    bluetoothAdapter?.listenUsingRfcommWithServiceRecord("KIETChat", uuid)
-                val socketTemp = serverSocket?.accept() // blocking
+                    bluetoothAdapter?.listenUsingRfcommWithServiceRecord("KietChat", uuid)
+                val socketTemp = serverSocket?.accept()
                 socket = socketTemp
                 runOnUiThread {
-                    statusView.text = "Connected (server)"
+                    status.text = "✅ Connected (Server)"
                 }
                 input = socket?.inputStream
                 output = socket?.outputStream
                 listenForMessages()
             } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    statusView.text = "Server failed: ${e.message}"
-                }
+                runOnUiThread { status.text = "Server error: ${e.message}" }
             }
         }
     }
@@ -128,19 +175,12 @@ class MainActivity : AppCompatActivity() {
                 val sock = device.createRfcommSocketToServiceRecord(uuid)
                 sock.connect()
                 socket = sock
-                runOnUiThread { statusView.text = "Connected to ${device.name}" }
+                runOnUiThread { status.text = "✅ Connected to ${device.name}" }
                 input = socket?.inputStream
                 output = socket?.outputStream
                 listenForMessages()
             } catch (e: IOException) {
-                e.printStackTrace()
-                runOnUiThread {
-                    statusView.text = "Connection failed: ${e.message}"
-                }
-                try {
-                    socket?.close()
-                } catch (_: Exception) {
-                }
+                runOnUiThread { status.text = "❌ Connection failed: ${e.message}" }
             }
         }
     }
@@ -152,11 +192,9 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val bytes = input?.read(buffer) ?: break
                     val msg = String(buffer, 0, bytes)
-                    runOnUiThread {
-                        addMessage("Peer: $msg", false)
-                    }
+                    runOnUiThread { addMessage("Peer", msg) }
                 } catch (e: Exception) {
-                    runOnUiThread { statusView.text = "Disconnected" }
+                    runOnUiThread { status.text = "⚠️ Disconnected" }
                     break
                 }
             }
@@ -167,43 +205,25 @@ class MainActivity : AppCompatActivity() {
         try {
             output?.write(msg.toByteArray())
         } catch (e: IOException) {
-            runOnUiThread {
-                statusView.text = "Send failed: ${e.message}"
-            }
+            runOnUiThread { status.text = "Send failed: ${e.message}" }
         }
     }
 
-    // Chat bubble UI helper
-    private fun addMessage(text: String, isSent: Boolean) {
-        val messageView = TextView(this)
-        messageView.text = text
-        messageView.textSize = 15f
-        messageView.setPadding(20, 12, 20, 12)
-        messageView.maxWidth = 800
-        messageView.background = ContextCompat.getDrawable(
-            this,
-            if (isSent) R.drawable.bubble_sent else R.drawable.bubble_received
+    private fun addMessage(sender: String, msg: String) {
+        val textView = TextView(this)
+        textView.text = "$sender: $msg"
+        textView.textSize = 16f
+        textView.setTextColor(
+            if (sender == "You") getColor(android.R.color.holo_blue_dark)
+            else getColor(android.R.color.black)
         )
-        messageView.setTextColor(ContextCompat.getColor(this, android.R.color.black))
-
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        params.setMargins(12, 8, 12, 8)
-        params.gravity = if (isSent) Gravity.END else Gravity.START
-        messageView.layoutParams = params
-
-        chatContainer.addView(messageView)
-
-        chatScroll.post {
-            chatScroll.fullScroll(View.FOCUS_DOWN)
-        }
+        chatContainer.addView(textView)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try {
+            unregisterReceiver(receiver)
             socket?.close()
             serverSocket?.close()
         } catch (_: Exception) {
